@@ -68,7 +68,11 @@ info "looking for wireless interfaces..."
 IFACES=$(iw dev | awk '$1=="Interface"{print $2}')
 
 if [ -z "$IFACES" ]; then
-    err "no wireless interfaces found. is the alfa plugged in?"
+    err "no wireless interfaces found"
+    err "possible fixes:"
+    err "  - plug in an external adapter (Alfa AWUS036ACHM recommended)"
+    err "  - check 'rfkill list' — your wifi might be soft-blocked"
+    err "  - run 'sudo rfkill unblock wifi' then retry"
     exit 1
 fi
 
@@ -76,17 +80,63 @@ echo ""
 echo "available interfaces:"
 i=1
 declare -a IFACE_ARR
+declare -a IFACE_MON
 for iface in $IFACES; do
     driver=$(ethtool -i "$iface" 2>/dev/null | grep driver | awk '{print $2}')
-    echo "  [$i] $iface ($driver)"
+    phy=$(iw dev "$iface" info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+    mon_support="no"
+    if [ -n "$phy" ]; then
+        if iw phy "$phy" info 2>/dev/null | grep -qw "monitor"; then
+            mon_support="yes"
+        fi
+    fi
+    echo "  [$i] $iface  driver=$driver  monitor=$mon_support"
     IFACE_ARR+=("$iface")
+    IFACE_MON+=("$mon_support")
     ((i++))
 done
 
+# check if any interface supports monitor mode
+HAS_MONITOR=0
+for mon in "${IFACE_MON[@]}"; do
+    [ "$mon" = "yes" ] && HAS_MONITOR=1
+done
+
+if [ $HAS_MONITOR -eq 0 ]; then
+    echo ""
+    warn "none of your interfaces support monitor mode"
+    warn "your built-in wifi card can't do packet capture/injection"
+    warn ""
+    warn "you need an external USB adapter. recommended:"
+    warn "  - Alfa AWUS036ACHM (~\$35, rtl8812au, works out of the box)"
+    warn "  - Alfa AWUS036NHA  (~\$25, atheros ar9271, solid for 2.4GHz)"
+    warn "  - Panda PAU09      (~\$20, rt5572, dual-band budget option)"
+    warn ""
+    warn "alternative: plug ethernet into your router, open 192.168.1.1,"
+    warn "and read the wifi password from the admin panel instead"
+    exit 1
+fi
+
 echo ""
-read -p "select interface [1]: " IFACE_CHOICE
-IFACE_CHOICE=${IFACE_CHOICE:-1}
+# auto-select first monitor-capable interface, or let user pick
+DEFAULT_PICK=1
+for idx in "${!IFACE_MON[@]}"; do
+    if [ "${IFACE_MON[$idx]}" = "yes" ]; then
+        DEFAULT_PICK=$((idx+1))
+        break
+    fi
+done
+
+read -p "select interface [$DEFAULT_PICK]: " IFACE_CHOICE
+IFACE_CHOICE=${IFACE_CHOICE:-$DEFAULT_PICK}
 IFACE="${IFACE_ARR[$((IFACE_CHOICE-1))]}"
+
+if [ "${IFACE_MON[$((IFACE_CHOICE-1))]}" = "no" ]; then
+    warn "$IFACE does not support monitor mode — this will probably fail"
+    read -p "continue anyway? [y/N]: " CONT
+    [ "$CONT" != "y" ] && [ "$CONT" != "Y" ] && exit 0
+fi
+
 log "using interface: $IFACE"
 
 # ─── kill interfering processes ───────────────────────────────────
@@ -102,6 +152,14 @@ MON_IFACE=$(iw dev | awk '$1=="Interface"{print $2}' | grep -i mon | head -1)
 if [ -z "$MON_IFACE" ]; then
     # some drivers just keep the same name in monitor mode
     MON_IFACE="$IFACE"
+    # verify it's actually in monitor mode
+    MODE=$(iw dev "$MON_IFACE" info 2>/dev/null | awk '/type/{print $2}')
+    if [ "$MODE" != "monitor" ]; then
+        err "failed to enter monitor mode on $IFACE"
+        err "this card likely doesn't support it despite reporting the capability"
+        err "get an external adapter (Alfa AWUS036ACHM)"
+        exit 1
+    fi
 fi
 log "monitor interface: $MON_IFACE"
 
