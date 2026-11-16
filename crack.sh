@@ -49,9 +49,18 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 if [ ! -f "$WORDLIST" ]; then
-    err "wordlist not found at $WORDLIST"
-    err "run setup.sh first or drop a wordlist at that path"
-    exit 1
+    warn "wordlist not found at $WORDLIST"
+    info "downloading rockyou.txt (~15MB)..."
+    mkdir -p "$(dirname "$WORDLIST")"
+    wget -q --show-progress -O "$WORDLIST" \
+        "https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt" \
+        || curl -L -o "$WORDLIST" \
+        "https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt"
+    if [ ! -f "$WORDLIST" ]; then
+        err "failed to download wordlist. grab it manually and drop it at $WORDLIST"
+        exit 1
+    fi
+    log "wordlist downloaded."
 fi
 
 # ─── find wireless interface ─────────────────────────────────────
